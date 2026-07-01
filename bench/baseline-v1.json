@@ -1,0 +1,9 @@
+{
+  "version": "v1",
+  "mode": "publish",
+  "duration_sec": 10,
+  "payload_bytes": 256,
+  "publishers": 4,
+  "target_recv_per_sec": 140000,
+  "notes": "Run on Linux: ./hi-im-bench -mode publish -duration 10s -payload 256"
+}

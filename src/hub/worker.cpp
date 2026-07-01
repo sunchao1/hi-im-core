@@ -1,0 +1,89 @@
+#include "hub/worker.hpp"
+
+#include <unistd.h>
+
+#include "hiim/wire/header.hpp"
+
+#if defined(__linux__)
+#include <sys/epoll.h>
+#else
+#include <sys/event.h>
+#include <sys/time.h>
+#endif
+
+namespace hiim::hub {
+
+Worker::Worker(HubContext& ctx, int idx) : ctx_(ctx), idx_(idx) {}
+
+Worker::~Worker() { Stop(); }
+
+void Worker::Start() {
+#if defined(__linux__)
+  epfd_ = epoll_create1(EPOLL_CLOEXEC);
+  epoll_event ev{};
+  ev.events = EPOLLIN;
+  ev.data.fd = ctx_.WorkerWakeup(idx_).Fd();
+  epoll_ctl(epfd_, EPOLL_CTL_ADD, ev.data.fd, &ev);
+#else
+  kqfd_ = kqueue();
+  struct kevent ev{};
+  EV_SET(&ev, ctx_.WorkerWakeup(idx_).Fd(), EVFILT_READ, EV_ADD, 0, 0, nullptr);
+  kevent(kqfd_, &ev, 1, nullptr, 0, nullptr);
+#endif
+  thread_ = std::thread([this] { Run(); });
+}
+
+void Worker::Stop() { ctx_.RequestStop(); }
+
+void Worker::Join() {
+  if (thread_.joinable()) {
+    thread_.join();
+  }
+#if defined(__linux__)
+  if (epfd_ >= 0) {
+    close(epfd_);
+    epfd_ = -1;
+  }
+#else
+  if (kqfd_ >= 0) {
+    close(kqfd_);
+    kqfd_ = -1;
+  }
+#endif
+}
+
+void Worker::Run() {
+  auto& q = ctx_.RecvQueue(idx_);
+  while (ctx_.Running().load(std::memory_order_acquire)) {
+#if defined(__linux__)
+    epoll_event events[4];
+    const int n = epoll_wait(epfd_, events, 4, 200);
+    for (int i = 0; i < n; ++i) {
+      if (events[i].data.fd == ctx_.WorkerWakeup(idx_).Fd()) {
+        ctx_.WorkerWakeup(idx_).Drain();
+      }
+    }
+#else
+    struct kevent events[4];
+    const timespec timeout{0, 200 * 1000 * 1000};
+    const int n = kevent(kqfd_, nullptr, 0, events, 4, &timeout);
+    for (int i = 0; i < n; ++i) {
+      if (static_cast<int>(events[i].ident) == ctx_.WorkerWakeup(idx_).Fd()) {
+        ctx_.WorkerWakeup(idx_).Drain();
+      }
+    }
+#endif
+
+    while (auto msg = q.Pop()) {
+      MessageHandler handler = ctx_.FindHandler(msg->type);
+      if (!handler) {
+        handler = ctx_.FindHandler(0);
+      }
+      if (handler) {
+        handler(ctx_, *msg);
+      }
+    }
+  }
+}
+
+}  // namespace hiim::hub
