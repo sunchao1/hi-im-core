@@ -1,8 +1,26 @@
+// Copyright 2026 chao.sun
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
 #include "hub/reactor.hpp"
 
 #include <cerrno>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#include "hub/socket_tuning.hpp"
 
 #include <cstring>
 #include <iostream>
@@ -10,6 +28,7 @@
 #include "hiim/wire/auth.hpp"
 #include "hiim/wire/header.hpp"
 #include "hiim/wire/sys_cmd.hpp"
+#include "hub/queue_push.hpp"
 
 #if defined(__linux__)
 #include <sys/epoll.h>
@@ -118,6 +137,7 @@ void Reactor::DrainNewConnections() {
     sessions_.emplace(session.sid, std::move(session));
 
     Session& s = sessions_[conn->sid];
+    TuneTcpSocket(s.fd);
 #if defined(__linux__)
     epoll_event ev{};
     ev.events = EPOLLIN;
@@ -275,7 +295,7 @@ void Reactor::EnqueueInbound(Session& session, const FrameView& frame) {
 
   const int worker_idx = PickWorker(session.sid);
   auto& q = ctx_.RecvQueue(worker_idx);
-  if (!q.Push(std::move(msg))) {
+  if (!PushWithBackoff(q, std::move(msg))) {
     std::cerr << "[reactor] recv queue full sid=" << session.sid << "\n";
     return;
   }
@@ -296,7 +316,7 @@ void Reactor::HandleReadable(int fd) {
   }
   Session& session = sessions_[fit->second];
 
-  uint8_t buf[8192];
+  uint8_t buf[65536];
   while (true) {
     const ssize_t n = recv(session.fd, buf, sizeof(buf), 0);
     if (n > 0) {
@@ -324,7 +344,7 @@ void Reactor::Run() {
   while (ctx_.Running().load(std::memory_order_acquire)) {
 #if defined(__linux__)
     epoll_event events[64];
-    const int n = epoll_wait(epfd_, events, 64, 200);
+    const int n = epoll_wait(epfd_, events, 64, 0);
     for (int i = 0; i < n; ++i) {
       const int fd = events[i].data.fd;
       if (events[i].events & (EPOLLIN | EPOLLERR | EPOLLHUP)) {

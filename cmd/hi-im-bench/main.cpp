@@ -1,6 +1,23 @@
+// Copyright 2026 chao.sun
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -94,17 +111,35 @@ int ConnectTcp(const std::string& addr) {
   if (!ParseHostPort(addr, host, port)) {
     return -1;
   }
-  const int fd = socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) {
+
+  addrinfo hints{};
+  hints.ai_family = AF_INET;
+  hints.ai_socktype = SOCK_STREAM;
+  addrinfo* res = nullptr;
+  const std::string port_str = std::to_string(port);
+  if (getaddrinfo(host.c_str(), port_str.c_str(), &hints, &res) != 0) {
     return -1;
   }
-  sockaddr_in sa{};
-  sa.sin_family = AF_INET;
-  sa.sin_port = htons(static_cast<uint16_t>(port));
-  inet_pton(AF_INET, host.c_str(), &sa.sin_addr);
-  if (connect(fd, reinterpret_cast<sockaddr*>(&sa), sizeof(sa)) < 0) {
+
+  int fd = -1;
+  for (addrinfo* p = res; p != nullptr; p = p->ai_next) {
+    fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+    if (fd < 0) {
+      continue;
+    }
+    if (connect(fd, p->ai_addr, p->ai_addrlen) == 0) {
+      break;
+    }
     close(fd);
-    return -1;
+    fd = -1;
+  }
+  freeaddrinfo(res);
+  if (fd >= 0) {
+    int yes = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
+    int buf = 512 * 1024;
+    setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf, sizeof(buf));
+    setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &buf, sizeof(buf));
   }
   return fd;
 }
@@ -183,12 +218,16 @@ std::vector<uint8_t> MakeBusinessPayload(std::size_t payload_size, uint32_t dest
 struct BenchResult {
   uint64_t sent{0};
   uint64_t recv{0};
+  double measure_seconds{0};
 };
 
 BenchResult RunPublishBench(const Options& opt) {
   std::atomic<bool> running{true};
   std::atomic<uint64_t> recv_count{0};
   std::atomic<uint64_t> sent_count{0};
+  std::atomic<bool> measuring{false};
+
+  const auto warmup = std::chrono::seconds(2);
 
   std::thread subscriber([&] {
     const int fd = ConnectTcp(opt.backend_addr);
@@ -203,17 +242,23 @@ BenchResult RunPublishBench(const Options& opt) {
     }
 
     FrameBuffer fb;
-    const auto end = std::chrono::steady_clock::now() + opt.duration;
+    const auto start = std::chrono::steady_clock::now();
+    const auto measure_begin = start + warmup;
+    const auto end = measure_begin + opt.duration;
     while (std::chrono::steady_clock::now() < end &&
            running.load(std::memory_order_relaxed)) {
-      uint8_t buf[8192];
+      uint8_t buf[262144];
       const ssize_t n = recv(fd, buf, sizeof(buf), 0);
       if (n <= 0) {
         break;
       }
       fb.Append(std::span<const uint8_t>(buf, static_cast<std::size_t>(n)));
+      const bool count_now =
+          measuring.load(std::memory_order_relaxed) &&
+          std::chrono::steady_clock::now() >= measure_begin;
       while (auto frame = fb.TryPopFrame()) {
-        if (HeaderFieldHost(frame->header, &WireHeader::flag) == kFlagExp) {
+        if (count_now &&
+            HeaderFieldHost(frame->header, &WireHeader::flag) == kFlagExp) {
           recv_count.fetch_add(1, std::memory_order_relaxed);
         }
       }
@@ -221,7 +266,10 @@ BenchResult RunPublishBench(const Options& opt) {
     close(fd);
   });
 
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  std::this_thread::sleep_for(warmup);
+  measuring.store(true, std::memory_order_release);
+  const auto measure_begin = std::chrono::steady_clock::now();
+  const auto measure_end = measure_begin + opt.duration;
 
   std::vector<std::thread> publishers;
   for (int i = 0; i < opt.publishers; ++i) {
@@ -239,10 +287,10 @@ BenchResult RunPublishBench(const Options& opt) {
       }
 
       const auto payload = MakeBusinessPayload(opt.payload_size, 30001);
-      const auto end = std::chrono::steady_clock::now() + opt.duration;
-      while (std::chrono::steady_clock::now() < end &&
+      const auto frame =
+          EncodeFrame(opt.cmd, nid, kFlagExp, std::span<const uint8_t>(payload));
+      while (std::chrono::steady_clock::now() < measure_end &&
              running.load(std::memory_order_relaxed)) {
-        const auto frame = EncodeFrame(opt.cmd, nid, kFlagExp, payload);
         if (!WriteAll(fd, frame)) {
           break;
         }
@@ -257,7 +305,8 @@ BenchResult RunPublishBench(const Options& opt) {
   }
   subscriber.join();
 
-  return BenchResult{sent_count.load(), recv_count.load()};
+  return BenchResult{sent_count.load(), recv_count.load(),
+                     static_cast<double>(opt.duration.count())};
 }
 
 BenchResult RunUnicastBench(const Options& opt) {
@@ -299,9 +348,10 @@ BenchResult RunUnicastBench(const Options& opt) {
   if (fd >= 0) {
     if (Handshake(fd, 30002, opt, 0)) {
       const auto payload = MakeBusinessPayload(opt.payload_size, 20002);
+      const auto frame =
+          EncodeFrame(opt.cmd, 30002, kFlagExp, std::span<const uint8_t>(payload));
       const auto end = std::chrono::steady_clock::now() + opt.duration;
       while (std::chrono::steady_clock::now() < end) {
-        const auto frame = EncodeFrame(opt.cmd, 30002, kFlagExp, payload);
         if (!WriteAll(fd, frame)) break;
         sent_count.fetch_add(1, std::memory_order_relaxed);
       }
@@ -317,25 +367,31 @@ BenchResult RunUnicastBench(const Options& opt) {
 
 int main(int argc, char** argv) {
   const Options opt = ParseArgs(argc, argv);
-  const auto started = std::chrono::steady_clock::now();
 
   BenchResult result{};
   if (opt.mode == "unicast") {
     result = RunUnicastBench(opt);
+    result.measure_seconds = static_cast<double>(opt.duration.count());
   } else {
     result = RunPublishBench(opt);
   }
 
-  const double seconds =
-      std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
-  const double sent_per_sec = seconds > 0 ? static_cast<double>(result.sent) / seconds : 0.0;
-  const double recv_per_sec = seconds > 0 ? static_cast<double>(result.recv) / seconds : 0.0;
+  const double seconds = result.measure_seconds > 0 ? result.measure_seconds : 1.0;
+  const double sent_per_sec = static_cast<double>(result.sent) / seconds;
+  const double recv_per_sec = static_cast<double>(result.recv) / seconds;
+
+  const bool pass = (opt.mode != "publish") || recv_per_sec >= 140000.0;
 
   std::cout << "mode=" << opt.mode << " duration=" << opt.duration.count() << "s"
             << " payload=" << opt.payload_size << "B"
+            << " publishers=" << opt.publishers
             << " sent=" << result.sent << " recv=" << result.recv << "\n"
             << "sent/s=" << static_cast<uint64_t>(sent_per_sec)
             << " recv/s=" << static_cast<uint64_t>(recv_per_sec) << "\n";
+  if (opt.mode == "publish") {
+    std::cout << "m1_target_recv_per_sec=140000 "
+              << (pass ? "PASS" : "FAIL") << "\n";
+  }
 
-  return 0;
+  return pass ? 0 : 1;
 }

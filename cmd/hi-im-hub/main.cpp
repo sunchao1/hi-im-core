@@ -1,3 +1,18 @@
+// Copyright 2026 chao.sun
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+
 #include <csignal>
 #include <atomic>
 #include <chrono>
@@ -38,6 +53,8 @@ hiim::hub::DualHubConfig ParseArgs(int argc, char** argv) {
       cfg.auth_pass = next();
     } else if (arg == "--health-listen") {
       cfg.health_listen = next();
+    } else if (arg == "--queue-capacity") {
+      cfg.queue_capacity = static_cast<std::size_t>(std::stoull(next()));
     } else if (arg == "--help") {
       std::cout << "Usage: hi-im-hub [options]\n"
                 << "  --forward-listen ADDR   default 0.0.0.0:28888\n"
@@ -46,7 +63,8 @@ hiim::hub::DualHubConfig ParseArgs(int argc, char** argv) {
                 << "  --worker-threads N      default 4\n"
                 << "  --auth-user USER        default proxy\n"
                 << "  --auth-pass PASS        default proxy\n"
-                << "  --health-listen ADDR    default 0.0.0.0:8080\n";
+                << "  --health-listen ADDR    default 0.0.0.0:8080\n"
+                << "  --queue-capacity N      default 262144\n";
       std::exit(0);
     }
   }

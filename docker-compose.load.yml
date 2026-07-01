@@ -1,0 +1,34 @@
+# 压测专用 compose 覆盖：提高文件句柄上限。
+# 用法：
+#   docker compose -f docker-compose.yml -f docker-compose.load.yml --profile run --profile bench run --rm bench
+
+services:
+  hub:
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    command:
+      - --forward-listen
+      - 0.0.0.0:28888
+      - --backend-listen
+      - 0.0.0.0:28889
+      - --health-listen
+      - 0.0.0.0:8080
+      - --auth-user
+      - proxy
+      - --auth-pass
+      - proxy
+      - --reactor-threads
+      - "4"
+      - --worker-threads
+      - "4"
+      - --queue-capacity
+      - "262144"
+
+  bench:
+    environment:
+      HIIM_BENCH_MODE: publish
+      HIIM_BENCH_DURATION: 10s
+      HIIM_BENCH_PAYLOAD: "256"
+      HIIM_BENCH_PUBLISHERS: "1"

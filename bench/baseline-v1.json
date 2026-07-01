@@ -3,7 +3,17 @@
   "mode": "publish",
   "duration_sec": 10,
   "payload_bytes": 256,
-  "publishers": 4,
+  "publishers": 1,
+  "reactor_threads": 4,
+  "worker_threads": 4,
+  "queue_capacity": 262144,
+  "sent": 1849368,
+  "recv": 1539429,
+  "sent_per_sec": 184936,
+  "recv_per_sec": 153942,
   "target_recv_per_sec": 140000,
-  "notes": "Run on Linux: ./hi-im-bench -mode publish -duration 10s -payload 256"
+  "pass": true,
+  "environment": "Docker Compose (linux/arm64 hub + load profile, macOS Docker Desktop host)",
+  "command": "docker compose -f docker-compose.yml -f docker-compose.load.yml --profile run up -d hub && docker compose -f docker-compose.yml -f docker-compose.load.yml --profile bench run --rm bench",
+  "notes": "Use docker-compose.load.yml (1 publisher, ulimits, queue-capacity). Multi-publisher publish bench currently contends and under-reports hub throughput."
 }

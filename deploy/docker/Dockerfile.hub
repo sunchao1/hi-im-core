@@ -1,4 +1,8 @@
-FROM ubuntu:22.04 AS build
+# Copyright 2026 chao.sun
+# SPDX-License-Identifier: Apache-2.0
+
+ARG BASE_IMAGE=ubuntu:22.04
+FROM ${BASE_IMAGE} AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake ca-certificates \
@@ -6,16 +10,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /src
 COPY . .
-RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+RUN rm -rf build \
+    && cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
     && cmake --build build -j \
     && ctest --test-dir build --output-on-failure
 
-FROM ubuntu:22.04
+ARG BASE_IMAGE=ubuntu:22.04
+FROM ${BASE_IMAGE}
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/build/hi-im-hub /usr/local/bin/hi-im-hub
+COPY --from=build /src/build/hi-im-bench /usr/local/bin/hi-im-bench
 
 EXPOSE 28888 28889 8080
+
+HEALTHCHECK --interval=5s --timeout=3s --retries=12 \
+  CMD curl -fsS http://127.0.0.1:8080/readyz | grep -q ok
+
 ENTRYPOINT ["hi-im-hub"]
+CMD ["--forward-listen", "0.0.0.0:28888", \
+     "--backend-listen", "0.0.0.0:28889", \
+     "--health-listen", "0.0.0.0:8080", \
+     "--auth-user", "proxy", \
+     "--auth-pass", "proxy"]

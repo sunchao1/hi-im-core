@@ -12,13 +12,5 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-
-#pragma once
-
-#include "hiim/hub/context.hpp"
-
-namespace hiim::hub {
-
-void RegisterBridgeHandlers(HubContext& forward_ctx, HubContext& backend_ctx);
-
-}  // namespace hiim::hub
+// This file exists as the canonical Apache-2.0 header template for hi-im-core.
+// New source files should include the same copyright block at the top.

@@ -1,0 +1,137 @@
+# hi-im-core 本地 Docker 验收栈（无 DB）
+#
+# 1) 编译 + 单元/集成测试:
+#    docker compose --profile build run --rm --build builder
+#
+#    Docker Hub 超时（国内）任选其一:
+#    cp .env.example .env
+#    docker compose --profile build run --rm --build builder
+#    或:
+#    docker compose -f docker-compose.yml -f docker-compose.mirror.cn.yml \
+#      --profile build run --rm --build builder
+#
+# 2) 启动 Hub（FORWARD/BACKEND/health）:
+#    docker compose --profile run up -d hub
+#
+# 3) 端到端验收（依赖已启动的 hub）:
+#    docker compose --profile accept run --rm accept
+#
+# 4) 一键：构建 → 启动 hub → 跑验收（失败即非 0 退出）:
+#    docker compose --profile build run --rm --build builder && \
+#    docker compose --profile run --profile accept up --abort-on-container-exit --exit-code-from accept
+#
+# 5) 压测（Hub 已运行时，M1 口径 publish 256B×10s）:
+#    docker compose -f docker-compose.yml -f docker-compose.load.yml \
+#      --profile run up -d hub
+#    docker compose -f docker-compose.yml -f docker-compose.load.yml \
+#      --profile bench run --rm bench
+#
+# 停止: docker compose --profile run down
+
+services:
+  builder:
+    profiles: ["build"]
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.build
+      args:
+        BASE_IMAGE: ${HIIM_BASE_IMAGE:-ubuntu:22.04}
+    image: hiim-core-builder
+    container_name: hiim-builder
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+    environment:
+      HIIM_ROOT: /workspace
+
+  hub:
+    profiles: ["run", "accept", "bench"]
+    build:
+      context: .
+      dockerfile: deploy/docker/Dockerfile.hub
+      args:
+        BASE_IMAGE: ${HIIM_BASE_IMAGE:-ubuntu:22.04}
+    image: hiim-core-hub
+    container_name: hiim-hub
+    restart: unless-stopped
+    ports:
+      - "${HIIM_FORWARD_HOST_PORT:-28888}:28888"   # FORWARD
+      - "${HIIM_BACKEND_HOST_PORT:-28889}:28889"   # BACKEND
+      - "${HIIM_HEALTH_HOST_PORT:-18080}:8080"     # /healthz /readyz（宿主机端口，容器内仍为 8080）
+    environment:
+      HIIM_AUTH_USER: proxy
+      HIIM_AUTH_PASS: proxy
+    command:
+      - --forward-listen
+      - 0.0.0.0:28888
+      - --backend-listen
+      - 0.0.0.0:28889
+      - --health-listen
+      - 0.0.0.0:8080
+      - --auth-user
+      - proxy
+      - --auth-pass
+      - proxy
+      - --reactor-threads
+      - "2"
+      - --worker-threads
+      - "2"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  accept:
+    profiles: ["accept"]
+    image: hiim-core-builder
+    container_name: hiim-accept
+    working_dir: /workspace
+    depends_on:
+      hub:
+        condition: service_healthy
+    volumes:
+      - .:/workspace
+    environment:
+      HIIM_ROOT: /workspace
+      HIIM_FORWARD_HOST: hub
+      HIIM_FORWARD_PORT: "28888"
+      HIIM_BACKEND_HOST: hub
+      HIIM_BACKEND_PORT: "28889"
+      HIIM_HEALTH_HOST: hub
+      HIIM_HEALTH_PORT: "8080"
+      HIIM_AUTH_USER: proxy
+      HIIM_AUTH_PASS: proxy
+    entrypoint: ["/bin/bash", "/workspace/deploy/docker/accept.sh"]
+
+  bench:
+    profiles: ["bench"]
+    image: hiim-core-builder
+    container_name: hiim-bench
+    working_dir: /workspace
+    depends_on:
+      hub:
+        condition: service_healthy
+    volumes:
+      - .:/workspace
+    environment:
+      HIIM_ROOT: /workspace
+      HIIM_BENCH_MODE: publish
+      HIIM_BENCH_DURATION: 10s
+      HIIM_BENCH_PAYLOAD: "256"
+      HIIM_BENCH_PUBLISHERS: "4"
+    entrypoint: ["/bin/bash", "-lc"]
+    command:
+      - |
+        if [[ ! -x /workspace/build/hi-im-bench ]]; then
+          /workspace/deploy/docker/build-in-linux.sh bin
+        fi
+        /workspace/build/hi-im-bench \
+          -mode $${HIIM_BENCH_MODE} \
+          -duration $${HIIM_BENCH_DURATION} \
+          -payload $${HIIM_BENCH_PAYLOAD} \
+          -publishers $${HIIM_BENCH_PUBLISHERS} \
+          -forward hub:28888 \
+          -backend hub:28889 \
+          --auth-user proxy \
+          --auth-pass proxy

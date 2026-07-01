@@ -1,3 +1,6 @@
+# Copyright 2026 chao.sun
+# SPDX-License-Identifier: Apache-2.0
+
 cmake_minimum_required(VERSION 3.16)
 project(hi-im-core VERSION 0.1.0 LANGUAGES CXX)
 
@@ -66,3 +69,7 @@ hiim_add_test(wire_header_test test/wire_header_test.cpp)
 hiim_add_test(frame_buffer_test test/frame_buffer_test.cpp)
 hiim_add_test(router_test test/router_test.cpp)
 hiim_add_test(hub_integration_test test/integration/hub_proxy_test.cpp)
+
+# 需已启动的 hi-im-hub（docker compose accept 专用，不纳入 ctest）
+add_executable(hub_remote_smoke test/integration/hub_remote_smoke.cpp)
+target_link_libraries(hub_remote_smoke PRIVATE hiim_wire pthread)
