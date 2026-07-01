@@ -1,0 +1,16 @@
+# 国内网络：覆盖基础镜像为 DaoCloud 镜像加速
+# 用法:
+#   docker compose -f docker-compose.yml -f docker-compose.mirror.cn.yml --profile build run --rm --build builder
+#
+# 等价于在项目根目录创建 .env 并设置 HIIM_BASE_IMAGE（见 .env.example）
+
+services:
+  builder:
+    build:
+      args:
+        BASE_IMAGE: docker.m.daocloud.io/library/ubuntu:22.04
+
+  hub:
+    build:
+      args:
+        BASE_IMAGE: docker.m.daocloud.io/library/ubuntu:22.04

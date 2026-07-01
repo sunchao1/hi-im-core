@@ -1,0 +1,19 @@
+# Copyright 2026 chao.sun
+# SPDX-License-Identifier: Apache-2.0
+
+# 可通过 build-arg / .env 的 HIIM_BASE_IMAGE 指定镜像源（见 .env.example）
+ARG BASE_IMAGE=ubuntu:22.04
+FROM ${BASE_IMAGE}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY deploy/docker/build-in-linux.sh /usr/local/bin/hiim-build-in-linux.sh
+RUN chmod +x /usr/local/bin/hiim-build-in-linux.sh
+
+WORKDIR /workspace
+ENV HIIM_ROOT=/workspace
+
+ENTRYPOINT ["/usr/local/bin/hiim-build-in-linux.sh"]
+CMD ["all"]

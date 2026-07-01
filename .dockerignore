@@ -1,0 +1,21 @@
+# 本地/compose builder 产物，勿打入镜像（CMakeCache 路径会与容器 WORKDIR 冲突）
+build/
+cmake-build-*/
+
+.git/
+.gitignore
+.env
+.env.*
+!.env.example
+
+.vscode/
+.idea/
+*.o
+*.a
+*.so
+*.dylib
+compile_commands.json
+
+# 文档与 CI 不参与 hub 镜像编译
+.github/
+doc/
