@@ -12,10 +12,10 @@
 | 1 | [技术设计文档.md](技术设计文档.md) | **主文档**：背景、架构、协议、线程模型、API、分片、可观测、目录、里程碑 |
 | 2 | [协议规范-bus-wire-v1.md](协议规范-bus-wire-v1.md) | 20 字节线协议、系统 cmd、与 RTMQ 兼容对照 |
 | 3 | [M1-实施清单.md](M1-实施清单.md) | 第一阶段（单 Shard + bench）文件级任务与验收 |
+| — | [简历-孙超-v1.0.md](简历-孙超-v1.0.md) | 作者简历（含 hi-im-core 项目，v1.0） |
+| — | [简历-CHANGELOG.md](简历-CHANGELOG.md) | 简历版本变更记录 |
 
 ---
-
-## 生态位置
 
 ```text
 hi-im-core（本仓库）     ← C++ Hub + bridge + C++ Proxy SDK + bench
