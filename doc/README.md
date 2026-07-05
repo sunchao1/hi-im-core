@@ -12,6 +12,7 @@
 | 1 | [技术设计文档.md](技术设计文档.md) | **主文档**：背景、架构、协议、线程模型、API、分片、可观测、目录、里程碑 |
 | 2 | [协议规范-bus-wire-v1.md](协议规范-bus-wire-v1.md) | 20 字节线协议、系统 cmd、与 RTMQ 兼容对照 |
 | 3 | [M1-实施清单.md](M1-实施清单.md) | 第一阶段（单 Shard + bench）文件级任务与验收 |
+| 4 | [theme/README.md](theme/README.md) | **面试专题**：epoll、SPSC/MPSC、Bug2、双平面、async_send、群聊端到端（含流程图） |
 
 ---
 
