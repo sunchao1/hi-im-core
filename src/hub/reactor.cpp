@@ -156,6 +156,8 @@ void Reactor::DrainSendQueue() {
   while (auto item = q.Pop()) {
     const auto it = sessions_.find(item->sid);
     if (it == sessions_.end()) {
+      std::cerr << "[reactor] drop send frame: session not found sid=" << item->sid
+                << " reactor=" << idx_ << " bytes=" << item->bytes.size() << "\n";
       continue;
     }
     SendBytes(it->second, item->bytes);

@@ -17,6 +17,8 @@
 
 #include <atomic>
 #include <cstddef>
+#include <deque>
+#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -65,6 +67,39 @@ class SpscQueue {
   std::vector<T> slots_;
   alignas(64) std::atomic<std::size_t> head_{0};
   alignas(64) std::atomic<std::size_t> tail_{0};
+};
+
+// Multi-producer / single-consumer queue (workers Push, distributor Pop).
+template <typename T>
+class MpscQueue {
+ public:
+  explicit MpscQueue(std::size_t capacity) : capacity_(capacity) {}
+
+  bool Push(T value) {
+    std::lock_guard lock(mu_);
+    if (queue_.size() >= capacity_) {
+      return false;
+    }
+    queue_.push_back(std::move(value));
+    return true;
+  }
+
+  std::optional<T> Pop() {
+    std::lock_guard lock(mu_);
+    if (queue_.empty()) {
+      return std::nullopt;
+    }
+    T out = std::move(queue_.front());
+    queue_.pop_front();
+    return out;
+  }
+
+  std::size_t Capacity() const { return capacity_; }
+
+ private:
+  const std::size_t capacity_;
+  std::mutex mu_;
+  std::deque<T> queue_;
 };
 
 }  // namespace hiim::hub

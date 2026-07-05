@@ -15,26 +15,16 @@
 
 #include "hiim/hub/bridge.hpp"
 
-#include <cstring>
 #include <iostream>
 
-#include "hiim/wire/header.hpp"
+#include "hiim/im/header.hpp"
 
 namespace hiim::hub {
 
 namespace {
 
-// IM MesgHeader layout (hi-im-api): type @0, nid @4 (48 bytes total).
-static constexpr std::size_t kImHeaderSize = 48;
-static constexpr std::size_t kImHeaderNidOffset = 4;
-
 uint32_t ReadImDestNid(const InboundMessage& msg) {
-  if (msg.payload.size() < kImHeaderSize) {
-    return 0;
-  }
-  uint32_t be_nid = 0;
-  std::memcpy(&be_nid, msg.payload.data() + kImHeaderNidOffset, sizeof(be_nid));
-  return hiim::wire::BeToHost32(be_nid);
+  return hiim::im::ReadDestNid(msg.payload);
 }
 
 void ForwardUplinkHandler(HubContext& ctx, const InboundMessage& msg) {

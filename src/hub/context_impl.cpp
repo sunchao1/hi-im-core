@@ -40,7 +40,7 @@ HubContext::HubContext(Plane plane, HubConfig cfg)
         std::make_unique<SpscQueue<InboundMessage>>(cfg_.queue_capacity));
     worker_wakeups_.push_back(std::make_unique<PipeWakeup>());
   }
-  dist_queue_ = std::make_unique<SpscQueue<OutboundFrame>>(cfg_.queue_capacity);
+  dist_queue_ = std::make_unique<MpscQueue<OutboundFrame>>(cfg_.queue_capacity);
   dist_wakeup_ = std::make_unique<PipeWakeup>();
 }
 
@@ -72,7 +72,7 @@ SpscQueue<OutboundFrame>& HubContext::SendQueue(int reactor_idx) {
   return *send_queues_.at(static_cast<std::size_t>(reactor_idx));
 }
 
-SpscQueue<OutboundFrame>& HubContext::DistQueue() { return *dist_queue_; }
+MpscQueue<OutboundFrame>& HubContext::DistQueue() { return *dist_queue_; }
 
 PipeWakeup& HubContext::ReactorWakeup(int reactor_idx) {
   return *reactor_wakeups_.at(static_cast<std::size_t>(reactor_idx));

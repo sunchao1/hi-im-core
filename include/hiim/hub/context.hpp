@@ -90,7 +90,7 @@ class HubContext {
   SpscQueue<NewConnection>& ConnQueue(int reactor_idx);
   SpscQueue<InboundMessage>& RecvQueue(int worker_idx);
   SpscQueue<OutboundFrame>& SendQueue(int reactor_idx);
-  SpscQueue<OutboundFrame>& DistQueue();
+  MpscQueue<OutboundFrame>& DistQueue();
 
   PipeWakeup& ReactorWakeup(int reactor_idx);
   PipeWakeup& WorkerWakeup(int worker_idx);
@@ -104,6 +104,10 @@ class HubContext {
 
   uint64_t NextSid();
 
+  friend Status Publish(HubContext& ctx, uint32_t cmd, const uint8_t* data, std::size_t len);
+  friend Status AsyncSend(HubContext& ctx, uint32_t cmd, uint32_t dest_nid,
+                          const uint8_t* data, std::size_t len);
+
  private:
   Plane plane_;
   HubConfig cfg_;
@@ -116,7 +120,7 @@ class HubContext {
   std::vector<std::unique_ptr<SpscQueue<NewConnection>>> conn_queues_;
   std::vector<std::unique_ptr<SpscQueue<InboundMessage>>> recv_queues_;
   std::vector<std::unique_ptr<SpscQueue<OutboundFrame>>> send_queues_;
-  std::unique_ptr<SpscQueue<OutboundFrame>> dist_queue_;
+  std::unique_ptr<MpscQueue<OutboundFrame>> dist_queue_;
 
   std::vector<std::unique_ptr<PipeWakeup>> reactor_wakeups_;
   std::vector<std::unique_ptr<PipeWakeup>> worker_wakeups_;

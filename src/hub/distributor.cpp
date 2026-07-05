@@ -17,6 +17,8 @@
 
 #include <unistd.h>
 
+#include "hiim/im/header.hpp"
+#include "hiim/wire/header.hpp"
 #include "hub/queue_push.hpp"
 
 #include <iostream>
@@ -29,6 +31,47 @@
 #endif
 
 namespace hiim::hub {
+
+namespace {
+
+void LogDroppedFrame(const OutboundFrame& frame, const char* reason) {
+  uint32_t wire_cmd = 0;
+  uint32_t im_dest_nid = 0;
+  uint64_t im_seq = 0;
+  if (frame.bytes.size() >= hiim::wire::kWireHeaderSize + hiim::im::kHeaderSize) {
+    hiim::wire::WireHeader wh{};
+    if (hiim::wire::DecodeHeader(
+            std::span<const uint8_t>(frame.bytes.data(), frame.bytes.size()), wh)) {
+      wire_cmd = hiim::wire::BeToHost32(wh.type);
+    }
+    const auto im = std::span<const uint8_t>(frame.bytes.data() + hiim::wire::kWireHeaderSize,
+                                               frame.bytes.size() - hiim::wire::kWireHeaderSize);
+    im_dest_nid = hiim::im::ReadDestNid(im);
+    im_seq = hiim::im::ReadSeq(im);
+  }
+  std::cerr << "[distributor] drop frame sid=" << frame.sid
+            << " reactor=" << frame.reactor_idx << " reason=" << reason
+            << " wire_cmd=0x" << std::hex << wire_cmd << std::dec
+            << " im_dest_nid=" << im_dest_nid << " seq=" << im_seq << "\n";
+}
+
+bool RouteToSendQueue(HubContext& ctx, OutboundFrame frame) {
+  if (frame.reactor_idx < 0) {
+    LogDroppedFrame(frame, "invalid reactor_idx");
+    return false;
+  }
+  const OutboundFrame log_frame = frame;
+  const int reactor_idx = frame.reactor_idx;
+  auto& sendq = ctx.SendQueue(reactor_idx);
+  if (!PushWithBackoff(sendq, std::move(frame))) {
+    LogDroppedFrame(log_frame, "send queue full");
+    return false;
+  }
+  ctx.ReactorWakeup(reactor_idx).Notify();
+  return true;
+}
+
+}  // namespace
 
 Distributor::Distributor(HubContext& ctx) : ctx_(ctx) {}
 
@@ -71,15 +114,7 @@ void Distributor::Join() {
 
 void Distributor::Run() {
   auto route_frame = [this](OutboundFrame frame) {
-    if (frame.reactor_idx < 0) {
-      return;
-    }
-    auto& sendq = ctx_.SendQueue(frame.reactor_idx);
-    if (!PushWithBackoff(sendq, std::move(frame))) {
-      std::cerr << "[distributor] send queue full\n";
-      return;
-    }
-    ctx_.ReactorWakeup(frame.reactor_idx).Notify();
+    RouteToSendQueue(ctx_, std::move(frame));
   };
 
   while (ctx_.Running().load(std::memory_order_acquire)) {

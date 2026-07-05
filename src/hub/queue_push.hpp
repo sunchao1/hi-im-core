@@ -6,8 +6,8 @@
 
 namespace hiim::hub {
 
-template <typename T>
-bool PushWithBackoff(SpscQueue<T>& queue, T value, int max_retries = 1000000) {
+template <typename Queue, typename T>
+bool PushWithBackoff(Queue& queue, T value, int max_retries = 1000000) {
   for (int i = 0; i < max_retries; ++i) {
     if (queue.Push(std::move(value))) {
       return true;
