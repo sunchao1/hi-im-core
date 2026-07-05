@@ -18,6 +18,7 @@
 #include <iostream>
 
 #include "hiim/im/header.hpp"
+#include "hub/route_log.hpp"
 
 namespace hiim::hub {
 
@@ -44,16 +45,16 @@ void BackendDownlinkHandler(HubContext& ctx, const InboundMessage& msg) {
     return;
   }
   const uint32_t dest_nid = ReadImDestNid(msg);
+  const uint64_t im_seq = hiim::im::ReadSeq(msg.payload);
+  std::cerr << "[bridge] backend recv downlink dest_nid=" << dest_nid << " seq=" << im_seq
+            << " cmd=0x" << std::hex << msg.type << std::dec << " sid=" << msg.sid << "\n";
   if (dest_nid == 0) {
-    std::cerr << "[bridge] missing IM dest nid\n";
+    std::cerr << "[bridge] missing IM dest nid seq=" << im_seq << "\n";
     return;
   }
   const Status st =
       peer->AsyncSend(msg.type, dest_nid, msg.payload.data(), msg.payload.size());
-  if (!st.ok()) {
-    std::cerr << "[bridge] backend async_send nid=" << dest_nid << " err="
-              << st.message << "\n";
-  }
+  LogBridgeAsyncSend(dest_nid, im_seq, msg.type, st);
 }
 
 void RegisterDefaultBridgeHandler(HubContext& ctx, MessageHandler handler) {

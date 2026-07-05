@@ -298,7 +298,9 @@ void Reactor::EnqueueInbound(Session& session, const FrameView& frame) {
   const int worker_idx = PickWorker(session.sid);
   auto& q = ctx_.RecvQueue(worker_idx);
   if (!PushWithBackoff(q, std::move(msg))) {
-    std::cerr << "[reactor] recv queue full sid=" << session.sid << "\n";
+    std::cerr << "[reactor] recv queue full sid=" << session.sid << " reactor=" << idx_
+              << " worker=" << worker_idx << " cmd=0x" << std::hex << msg.type << std::dec
+              << "\n";
     return;
   }
   ctx_.WorkerWakeup(worker_idx).Notify();

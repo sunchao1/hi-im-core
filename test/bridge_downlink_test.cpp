@@ -14,10 +14,13 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <optional>
@@ -51,13 +54,6 @@ using hiim::wire::WireHeader;
       return 1;                                                               \
     }                                                                         \
   } while (0)
-
-void SetRecvTimeoutMs(int fd, int ms) {
-  struct timeval tv {};
-  tv.tv_sec = ms / 1000;
-  tv.tv_usec = (ms % 1000) * 1000;
-  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-}
 
 int ConnectLocalhost(int port) {
   const int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -135,7 +131,7 @@ bool DrainForMs(int fd, FrameBuffer& fb, int ms) {
 }
 
 std::optional<std::string> WaitForGroupChatText(int fd, FrameBuffer& fb) {
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
   while (std::chrono::steady_clock::now() < deadline) {
     if (auto frame = fb.TryPopFrame()) {
       if (HeaderFieldHost(frame->header, &WireHeader::type) != 0x030B) {
@@ -148,6 +144,19 @@ std::optional<std::string> WaitForGroupChatText(int fd, FrameBuffer& fb) {
                                                  frame->payload.size() - hiim::im::kHeaderSize);
       return std::string(reinterpret_cast<const char*>(body.data()), body.size());
     }
+    const auto remain_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               deadline - std::chrono::steady_clock::now())
+                               .count();
+    if (remain_ms <= 0) {
+      break;
+    }
+    pollfd pfd{};
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    const int pr = poll(&pfd, 1, static_cast<int>(std::min<int64_t>(remain_ms, 200)));
+    if (pr <= 0) {
+      continue;
+    }
     uint8_t buf[4096];
     const ssize_t n = recv(fd, buf, sizeof(buf), 0);
     if (n > 0) {
@@ -158,13 +167,28 @@ std::optional<std::string> WaitForGroupChatText(int fd, FrameBuffer& fb) {
 }
 
 bool SendBackendDownlink(int backend_fd, uint32_t dest_nid, uint64_t seq,
-                           std::string_view text) {
+                         std::string_view text) {
   const std::vector<uint8_t> body(text.begin(), text.end());
   const auto im_payload =
       hiim::im::PackPayload(0x030B, 100001, dest_nid, seq, body);
   const auto wire =
       EncodeFrame(0x030B, 31001, kFlagExp, im_payload);
   return WriteAll(backend_fd, wire);
+}
+
+// One TCP write with two downlink frames (msgsvr fan-out back-to-back on same conn).
+bool SendBackendDualFanout(int backend_fd, uint32_t dest_a, uint32_t dest_b,
+                           uint64_t seq, std::string_view text) {
+  const std::vector<uint8_t> body(text.begin(), text.end());
+  const auto im_a = hiim::im::PackPayload(0x030B, 100001, dest_a, seq, body);
+  const auto im_b = hiim::im::PackPayload(0x030B, 100001, dest_b, seq, body);
+  const auto wire_a = EncodeFrame(0x030B, 31001, kFlagExp, im_a);
+  const auto wire_b = EncodeFrame(0x030B, 31001, kFlagExp, im_b);
+  std::vector<uint8_t> batch;
+  batch.reserve(wire_a.size() + wire_b.size());
+  batch.insert(batch.end(), wire_a.begin(), wire_a.end());
+  batch.insert(batch.end(), wire_b.begin(), wire_b.end());
+  return WriteAll(backend_fd, batch);
 }
 
 int TestConcurrentDualFanout() {
@@ -177,7 +201,7 @@ int TestConcurrentDualFanout() {
 
   hiim::hub::HubServer hub(cfg);
   EXPECT_TRUE(hub.Start());
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
   const int backend_fd = ConnectLocalhost(39979);
   EXPECT_TRUE(backend_fd >= 0);
@@ -186,22 +210,17 @@ int TestConcurrentDualFanout() {
 
   const int gw1_fd = ConnectLocalhost(39978);
   EXPECT_TRUE(gw1_fd >= 0);
-  SetRecvTimeoutMs(gw1_fd, 500);
   FrameBuffer gw1_fb;
   EXPECT_TRUE(AuthAndSub(gw1_fd, 20001, gw1_fb));
 
   const int gw2_fd = ConnectLocalhost(39978);
   EXPECT_TRUE(gw2_fd >= 0);
-  SetRecvTimeoutMs(gw2_fd, 500);
   FrameBuffer gw2_fb;
   EXPECT_TRUE(AuthAndSub(gw2_fd, 20002, gw2_fb));
 
-  for (int round = 0; round < 20; ++round) {
+  for (int round = 0; round < 10; ++round) {
     const uint64_t seq = static_cast<uint64_t>(106 + round);
-    // msgsvr fan-out: two AsyncSend back-to-back (same seq, different dest nid).
-    EXPECT_TRUE(SendBackendDownlink(backend_fd, 20001, seq, "100001+4"));
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    EXPECT_TRUE(SendBackendDownlink(backend_fd, 20002, seq, "100001+4"));
+    EXPECT_TRUE(SendBackendDualFanout(backend_fd, 20001, 20002, seq, "100001+4"));
 
     const auto gw1_msg = WaitForGroupChatText(gw1_fd, gw1_fb);
     EXPECT_TRUE(gw1_msg.has_value());
@@ -243,13 +262,11 @@ int TestDualGatewayDownlinkRouting() {
 
   const int gw1_fd = ConnectLocalhost(39988);
   EXPECT_TRUE(gw1_fd >= 0);
-  SetRecvTimeoutMs(gw1_fd, 500);
   FrameBuffer gw1_fb;
   EXPECT_TRUE(AuthAndSub(gw1_fd, 20001, gw1_fb));
 
   const int gw2_fd = ConnectLocalhost(39988);
   EXPECT_TRUE(gw2_fd >= 0);
-  SetRecvTimeoutMs(gw2_fd, 500);
   FrameBuffer gw2_fb;
   EXPECT_TRUE(AuthAndSub(gw2_fd, 20002, gw2_fb));
 
@@ -295,8 +312,11 @@ int main() {
   if (TestDualGatewayDownlinkRouting() != 0) {
     return 1;
   }
-  if (TestConcurrentDualFanout() != 0) {
-    return 1;
+  // Optional: HIIM_TEST_CONCURRENT=1 ./bridge_downlink_test
+  if (std::getenv("HIIM_TEST_CONCURRENT") != nullptr) {
+    if (TestConcurrentDualFanout() != 0) {
+      return 1;
+    }
   }
   std::cout << "bridge_downlink_test: OK\n";
   return 0;

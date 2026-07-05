@@ -20,6 +20,7 @@
 
 #include "hiim/wire/header.hpp"
 #include "hub/queue_push.hpp"
+#include "hub/route_log.hpp"
 
 namespace hiim::hub {
 
@@ -37,7 +38,7 @@ HubContext::HubContext(Plane plane, HubConfig cfg)
   }
   for (int i = 0; i < workers; ++i) {
     recv_queues_.push_back(
-        std::make_unique<SpscQueue<InboundMessage>>(cfg_.queue_capacity));
+        std::make_unique<MpscQueue<InboundMessage>>(cfg_.queue_capacity));
     worker_wakeups_.push_back(std::make_unique<PipeWakeup>());
   }
   dist_queue_ = std::make_unique<MpscQueue<OutboundFrame>>(cfg_.queue_capacity);
@@ -64,7 +65,7 @@ SpscQueue<NewConnection>& HubContext::ConnQueue(int reactor_idx) {
   return *conn_queues_.at(static_cast<std::size_t>(reactor_idx));
 }
 
-SpscQueue<InboundMessage>& HubContext::RecvQueue(int worker_idx) {
+MpscQueue<InboundMessage>& HubContext::RecvQueue(int worker_idx) {
   return *recv_queues_.at(static_cast<std::size_t>(worker_idx));
 }
 
@@ -108,13 +109,16 @@ Status Publish(HubContext& ctx, uint32_t cmd, const uint8_t* data, std::size_t l
     const auto frame =
         hiim::wire::EncodeFrame(cmd, sub.nid, hiim::wire::kFlagExp,
                                 std::span<const uint8_t>(data, len));
+    const RouteLogMeta meta = ParseRouteLogMeta(frame);
     OutboundFrame out{};
     out.sid = sub.sid;
     out.reactor_idx = sub.reactor_idx;
     out.bytes = std::move(frame);
     if (!PushWithBackoff(ctx.DistQueue(), std::move(out))) {
+      LogDistQueuePushFail(ctx.GetPlane(), meta, "publish");
       return Status::Error(StatusCode::kQueueFull);
     }
+    LogPublishEnqueue(ctx.GetPlane(), sub.nid, sub.sid, sub.reactor_idx, meta);
   }
   ctx.DistWakeup().Notify();
   return Status::Ok();
@@ -129,13 +133,16 @@ Status AsyncSend(HubContext& ctx, uint32_t cmd, uint32_t dest_nid,
 
   const auto frame = hiim::wire::EncodeFrame(cmd, dest_nid, hiim::wire::kFlagExp,
                                              std::span<const uint8_t>(data, len));
+  const RouteLogMeta meta = ParseRouteLogMeta(frame);
   OutboundFrame out{};
   out.sid = route->sid;
   out.reactor_idx = route->reactor_idx;
   out.bytes = std::move(frame);
   if (!PushWithBackoff(ctx.DistQueue(), std::move(out))) {
+    LogDistQueuePushFail(ctx.GetPlane(), meta, "async_send");
     return Status::Error(StatusCode::kQueueFull);
   }
+  LogAsyncSendEnqueue(ctx.GetPlane(), dest_nid, route->sid, route->reactor_idx, meta);
   ctx.DistWakeup().Notify();
   return Status::Ok();
 }

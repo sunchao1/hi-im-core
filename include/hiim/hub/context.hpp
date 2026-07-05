@@ -88,7 +88,7 @@ class HubContext {
   Status AsyncSend(uint32_t cmd, uint32_t dest_nid, const uint8_t* data, std::size_t len);
 
   SpscQueue<NewConnection>& ConnQueue(int reactor_idx);
-  SpscQueue<InboundMessage>& RecvQueue(int worker_idx);
+  MpscQueue<InboundMessage>& RecvQueue(int worker_idx);
   SpscQueue<OutboundFrame>& SendQueue(int reactor_idx);
   MpscQueue<OutboundFrame>& DistQueue();
 
@@ -118,7 +118,7 @@ class HubContext {
   std::atomic<uint64_t> next_sid_{1};
 
   std::vector<std::unique_ptr<SpscQueue<NewConnection>>> conn_queues_;
-  std::vector<std::unique_ptr<SpscQueue<InboundMessage>>> recv_queues_;
+  std::vector<std::unique_ptr<MpscQueue<InboundMessage>>> recv_queues_;
   std::vector<std::unique_ptr<SpscQueue<OutboundFrame>>> send_queues_;
   std::unique_ptr<MpscQueue<OutboundFrame>> dist_queue_;
 
