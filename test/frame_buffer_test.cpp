@@ -18,6 +18,7 @@
 #include <iostream>
 #include <vector>
 
+#include "hiim/im/header.hpp"
 #include "hiim/wire/header.hpp"
 #include "wire/frame_buffer.hpp"
 
@@ -110,12 +111,40 @@ int TestInvalidChecksumClearsBuffer() {
   return 0;
 }
 
+// Reactor pops all sticky frames before worker consumes; first FrameView must keep
+// its payload after the second TryPopFrame mutates buf_ (old span impl read wrong nid).
+int TestStickyDualFanoutPayloadSurvivesPop() {
+  const uint8_t body[] = {'x'};
+  const auto f1 = hiim::im::PackPayload(0x030Bu, 100001, 20001, 103, body);
+  const auto f2 = hiim::im::PackPayload(0x030Bu, 100001, 20002, 103, body);
+  const auto wire1 = MakeFrame(0x030Bu, 20001, f1);
+  const auto wire2 = MakeFrame(0x030Bu, 20002, f2);
+
+  std::vector<uint8_t> blob;
+  blob.insert(blob.end(), wire1.begin(), wire1.end());
+  blob.insert(blob.end(), wire2.begin(), wire2.end());
+
+  FrameBuffer fb;
+  fb.Append(blob);
+
+  const auto v1 = fb.TryPopFrame();
+  const auto v2 = fb.TryPopFrame();
+  EXPECT_TRUE(v1.has_value());
+  EXPECT_TRUE(v2.has_value());
+  EXPECT_EQ(hiim::im::ReadDestNid(v1->payload), 20001u);
+  EXPECT_EQ(hiim::im::ReadDestNid(v2->payload), 20002u);
+  EXPECT_EQ(hiim::im::ReadSeq(v1->payload), 103u);
+  EXPECT_EQ(hiim::im::ReadSeq(v2->payload), 103u);
+  return 0;
+}
+
 }  // namespace
 
 int main() {
   if (TestSingleCompleteFrame() != 0) return 1;
   if (TestPartialFrameThenComplete() != 0) return 1;
   if (TestStickyMultipleFrames() != 0) return 1;
+  if (TestStickyDualFanoutPayloadSurvivesPop() != 0) return 1;
   if (TestInvalidChecksumClearsBuffer() != 0) return 1;
   std::cout << "frame_buffer_test: OK\n";
   return 0;

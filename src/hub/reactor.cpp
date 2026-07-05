@@ -25,6 +25,7 @@
 #include <cstring>
 #include <iostream>
 
+#include "hiim/im/header.hpp"
 #include "hiim/wire/auth.hpp"
 #include "hiim/wire/header.hpp"
 #include "hiim/wire/sys_cmd.hpp"
@@ -223,7 +224,7 @@ bool Reactor::HandleSystem(Session& session, const FrameView& frame) {
   switch (static_cast<SysCmd>(type)) {
     case SysCmd::kAuthReq: {
       hiim::wire::AuthPayload auth{};
-      if (!DecodeAuthPayload(frame.payload, auth)) {
+      if (!DecodeAuthPayload(std::span<const uint8_t>(frame.payload), auth)) {
         std::cerr << "[reactor] invalid AUTH payload sid=" << session.sid << "\n";
         CloseSession(session.sid);
         return false;
@@ -281,7 +282,7 @@ bool Reactor::HandleSystem(Session& session, const FrameView& frame) {
   }
 }
 
-void Reactor::EnqueueInbound(Session& session, const FrameView& frame) {
+void Reactor::EnqueueInbound(Session& session, FrameView frame) {
   if (!session.authed) {
     CloseSession(session.sid);
     return;
@@ -293,9 +294,20 @@ void Reactor::EnqueueInbound(Session& session, const FrameView& frame) {
   msg.nid = session.nid;
   msg.type = HeaderFieldHost(frame.header, &WireHeader::type);
   msg.flag = HeaderFieldHost(frame.header, &WireHeader::flag);
-  msg.payload.assign(frame.payload.begin(), frame.payload.end());
 
   const int worker_idx = PickWorker(session.sid);
+  if (msg.flag == kFlagExp && frame.payload.size() >= hiim::im::kHeaderSize) {
+    const uint32_t wire_nid = HeaderFieldHost(frame.header, &WireHeader::nid);
+    const uint32_t im_dest = hiim::im::ReadDestNid(frame.payload);
+    const uint64_t im_seq = hiim::im::ReadSeq(frame.payload);
+    std::cerr << "[reactor] enqueue inbound sid=" << session.sid << " reactor=" << idx_
+              << " worker=" << worker_idx << " wire_nid=" << wire_nid
+              << " im_dest_nid=" << im_dest << " seq=" << im_seq << " cmd=0x" << std::hex
+              << msg.type << std::dec << "\n";
+  }
+
+  msg.payload = std::move(frame.payload);
+
   auto& q = ctx_.RecvQueue(worker_idx);
   if (!PushWithBackoff(q, std::move(msg))) {
     std::cerr << "[reactor] recv queue full sid=" << session.sid << " reactor=" << idx_
@@ -332,7 +344,7 @@ void Reactor::HandleReadable(int fd) {
             return;
           }
         } else {
-          EnqueueInbound(session, *frame);
+          EnqueueInbound(session, std::move(*frame));
         }
       }
       continue;

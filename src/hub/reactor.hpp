@@ -55,7 +55,7 @@ class Reactor {
   void HandleReadable(int fd);
   void HandleWritable(int fd);
   void CloseSession(uint64_t sid);
-  void EnqueueInbound(Session& session, const hiim::wire::FrameView& frame);
+  void EnqueueInbound(Session& session, hiim::wire::FrameView frame);
   bool HandleSystem(Session& session, const hiim::wire::FrameView& frame);
   bool SendBytes(Session& session, std::span<const uint8_t> data);
   void UpdateInterest(Session& session, bool want_read, bool want_write);

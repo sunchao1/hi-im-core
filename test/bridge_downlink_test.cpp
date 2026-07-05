@@ -243,6 +243,54 @@ int TestConcurrentDualFanout() {
   return 0;
 }
 
+int TestStickyDualFanoutRouting() {
+  hiim::hub::DualHubConfig cfg;
+  cfg.forward_listen = "127.0.0.1:39968";
+  cfg.backend_listen = "127.0.0.1:39969";
+  cfg.health_listen = "127.0.0.1:39078";
+  cfg.reactor_threads = 2;
+  cfg.worker_threads = 4;
+
+  hiim::hub::HubServer hub(cfg);
+  EXPECT_TRUE(hub.Start());
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+  const int backend_fd = ConnectLocalhost(39969);
+  EXPECT_TRUE(backend_fd >= 0);
+  FrameBuffer backend_fb;
+  EXPECT_TRUE(AuthAndSub(backend_fd, 31001, backend_fb));
+
+  const int gw1_fd = ConnectLocalhost(39968);
+  EXPECT_TRUE(gw1_fd >= 0);
+  FrameBuffer gw1_fb;
+  EXPECT_TRUE(AuthAndSub(gw1_fd, 20001, gw1_fb));
+
+  const int gw2_fd = ConnectLocalhost(39968);
+  EXPECT_TRUE(gw2_fd >= 0);
+  FrameBuffer gw2_fb;
+  EXPECT_TRUE(AuthAndSub(gw2_fd, 20002, gw2_fb));
+
+  EXPECT_TRUE(SendBackendDualFanout(backend_fd, 20001, 20002, 107, "100001+5"));
+
+  const auto gw1_msg = WaitForGroupChatText(gw1_fd, gw1_fb);
+  EXPECT_TRUE(gw1_msg.has_value());
+  EXPECT_TRUE(*gw1_msg == "100001+5");
+
+  const auto gw2_msg = WaitForGroupChatText(gw2_fd, gw2_fb);
+  EXPECT_TRUE(gw2_msg.has_value());
+  EXPECT_TRUE(*gw2_msg == "100001+5");
+
+  EXPECT_TRUE(!DrainForMs(gw1_fd, gw1_fb, 100));
+  EXPECT_TRUE(!DrainForMs(gw2_fd, gw2_fb, 100));
+
+  close(gw2_fd);
+  close(gw1_fd);
+  close(backend_fd);
+  hub.Stop();
+  hub.Wait();
+  return 0;
+}
+
 int TestDualGatewayDownlinkRouting() {
   hiim::hub::DualHubConfig cfg;
   cfg.forward_listen = "127.0.0.1:39988";
@@ -310,6 +358,9 @@ int main() {
     return 1;
   }
   if (TestDualGatewayDownlinkRouting() != 0) {
+    return 1;
+  }
+  if (TestStickyDualFanoutRouting() != 0) {
     return 1;
   }
   // Optional: HIIM_TEST_CONCURRENT=1 ./bridge_downlink_test

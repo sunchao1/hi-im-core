@@ -27,7 +27,7 @@ namespace hiim::wire {
 
 struct FrameView {
   WireHeader header;
-  std::span<const uint8_t> payload;
+  std::vector<uint8_t> payload;
 };
 
 class FrameBuffer {
@@ -57,9 +57,13 @@ class FrameBuffer {
       return std::nullopt;
     }
 
-    FrameView view{hdr, std::span<const uint8_t>(buf_.data() + kWireHeaderSize, payload_len)};
+    // Copy payload before erase: reactor may TryPopFrame twice (sticky fan-out) before
+    // EnqueueInbound reads frame.payload; a span into buf_ would dangle after erase.
+    std::vector<uint8_t> payload(
+        buf_.data() + kWireHeaderSize,
+        buf_.data() + kWireHeaderSize + static_cast<std::ptrdiff_t>(payload_len));
     buf_.erase(buf_.begin(), buf_.begin() + static_cast<std::ptrdiff_t>(frame_len));
-    return view;
+    return FrameView{hdr, std::move(payload)};
   }
 
  private:
