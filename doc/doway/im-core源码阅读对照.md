@@ -170,3 +170,5 @@ ctest --test-dir build --output-on-failure
 **核心 C++ 约 2,750 行（30 个文件），加上测试和入口约 4,300 行；配合 ~2,000 行设计文档，整体精读量在 6,000 行左右。** 对一个高性能 IM Hub 来说，这个规模很克制，精读性价比很高。
 
 优先啃 **reactor.cpp + queue.hpp + bridge/router/distributor** 五条线，再对照 `bridge_downlink_test` 和 `hub_proxy_test` 把双平面和路由串起来。
+
+**第二遍必读**：[跟一条消息读代码.md](./跟一条消息读代码.md) — 按函数顺序跟一条上行业务帧打卡源码。
