@@ -12,6 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件：pipe_wakeup.hpp
+// 职责：跨线程唤醒机制，让 epoll/kqueue 线程感知队列有新数据。
+// 流水线角色：Listener → Reactor → Worker → Distributor 各阶段的唤醒通道。
+// 涉及唤醒点：
+//   - ReactorWakeup：Listener/Distributor Notify → Reactor Drain
+//   - WorkerWakeup：Reactor Notify → Worker Drain
+//   - DistWakeup：Publish/AsyncSend Notify → Distributor Drain
+// Linux 使用 eventfd，macOS 使用 pipe。
+// =============================================================================
 
 #pragma once
 
@@ -26,6 +36,7 @@
 
 namespace hiim::hub {
 
+// 跨线程唤醒：生产者 Notify，消费者注册 fd 到 epoll 并在可读时 Drain。
 class PipeWakeup {
  public:
   PipeWakeup() {
@@ -57,9 +68,11 @@ class PipeWakeup {
   PipeWakeup(const PipeWakeup&) = delete;
   PipeWakeup& operator=(const PipeWakeup&) = delete;
 
+  // 供 epoll/kqueue 注册的可读 fd。
   int Fd() const { return fd_; }
   bool Valid() const { return fd_ >= 0; }
 
+  // 生产者调用：写入计数/字节，触发 epoll 可读事件。
   void Notify() {
 #if defined(__linux__)
     if (fd_ < 0) {
@@ -78,6 +91,7 @@ class PipeWakeup {
 #endif
   }
 
+  // 消费者调用：读空 eventfd/pipe，避免 epoll 持续触发。
   void Drain() {
 #if defined(__linux__)
     uint64_t v = 0;

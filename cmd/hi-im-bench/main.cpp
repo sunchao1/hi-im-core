@@ -12,6 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件：hi-im-bench/main.cpp
+// 职责：Hub 压测工具，模拟多个 hubclient 代理向 FORWARD/BACKEND 发帧。
+// 模式：
+//   publish  — 模拟 gateway 上行 + msgsvr SUB 收 publish（M1 验收口径）
+//   async_send — 模拟 msgsvr 下行 AsyncSend
+// 用法：./hi-im-bench -mode publish -duration 10s -payload 256
+// =============================================================================
 
 #include <arpa/inet.h>
 #include <fcntl.h>

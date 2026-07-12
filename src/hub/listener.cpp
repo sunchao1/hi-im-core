@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件：listener.cpp
+// 职责：实现 TCP accept 循环，将 NewConnection 推入 ConnQueue 并唤醒 Reactor。
+// 流水线角色：Listener → Reactor → Worker → Distributor 的入口。
+// 涉及队列：ConnQueue[reactor_idx]（SPSC，本线程 Push / Reactor Pop）。
+// 执行线程：Listener 专用线程。
+// =============================================================================
 
 #include "hub/listener.hpp"
 
@@ -56,6 +63,7 @@ int SetNonBlocking(int fd) {
   return fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 }
 
+// 轮询选择 Reactor 索引，将新连接均匀分配到各 Reactor。
 int PickReactor(int reactor_count) {
   static std::atomic<uint64_t> round{0};
   const auto n = round.fetch_add(1, std::memory_order_relaxed);
@@ -79,6 +87,7 @@ bool Listener::ParseListenAddr(int& port) const {
   return true;
 }
 
+// 创建 listen socket、bind、listen，并启动 Run 线程。
 bool Listener::Start() {
   if (started_.exchange(true)) {
     return true;
@@ -140,6 +149,7 @@ void Listener::Join() {
   }
 }
 
+// --- accept 主循环 ---
 void Listener::Run() {
   while (ctx_.Running().load(std::memory_order_acquire)) {
     sockaddr_in client{};
@@ -162,12 +172,14 @@ void Listener::Run() {
     conn.fd = fd;
     conn.sid = ctx_.NextSid();
 
+    // Push 到目标 Reactor 的 ConnQueue，失败则丢弃连接
     auto& q = ctx_.ConnQueue(reactor_idx);
     if (!q.Push(std::move(conn))) {
       std::cerr << "[listener] conn queue full, dropping fd\n";
       close(fd);
       continue;
     }
+    // 唤醒 Reactor 线程处理新连接
     ctx_.ReactorWakeup(reactor_idx).Notify();
   }
 }

@@ -12,6 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件：reactor.cpp
+// 职责：epoll/kqueue 事件循环，会话管理，协议帧解析与上下行队列桥接。
+// 流水线角色：Listener → Reactor → Worker → Distributor 的核心 I/O 层。
+// 涉及队列：
+//   - ConnQueue[idx]（SPSC，Listener Push / 本 Reactor Pop）
+//   - SendQueue[idx]（SPSC，Distributor Push / 本 Reactor Pop）
+//   - RecvQueue[worker]（MPSC，本 Reactor Push / Worker Pop）
+// 执行线程：每个 Reactor 实例独占一个线程。
+// =============================================================================
 
 #include "hub/reactor.hpp"
 
@@ -65,6 +75,7 @@ Reactor::Reactor(HubContext& ctx, int idx, int worker_count)
 
 Reactor::~Reactor() { Stop(); }
 
+// --- 启动：创建 epoll 并注册唤醒 fd ---
 void Reactor::Start() {
 #if defined(__linux__)
   epfd_ = epoll_create1(EPOLL_CLOEXEC);
@@ -108,10 +119,12 @@ void Reactor::Join() {
 #endif
 }
 
+// sid % worker_count：stick 规则，同一会话的业务帧始终进入同一 Worker。
 int Reactor::PickWorker(uint64_t sid) const {
   return static_cast<int>(sid % static_cast<uint64_t>(worker_count_));
 }
 
+// 更新 epoll 对 session fd 的 EPOLLIN/EPOLLOUT 监听。
 void Reactor::UpdateInterest(Session& session, bool want_read, bool want_write) {
 #if defined(__linux__)
   epoll_event ev{};
@@ -128,6 +141,7 @@ void Reactor::UpdateInterest(Session& session, bool want_read, bool want_write) 
 #endif
 }
 
+// --- 新连接入厂：从 ConnQueue Pop 并注册 epoll ---
 void Reactor::DrainNewConnections() {
   auto& q = ctx_.ConnQueue(idx_);
   while (auto conn = q.Pop()) {
@@ -152,6 +166,7 @@ void Reactor::DrainNewConnections() {
   }
 }
 
+// --- 下行发送：从 SendQueue Pop 并写入 outbuf ---
 void Reactor::DrainSendQueue() {
   auto& q = ctx_.SendQueue(idx_);
   while (auto item = q.Pop()) {
@@ -165,6 +180,7 @@ void Reactor::DrainSendQueue() {
   }
 }
 
+// 将待发数据追加到 outbuf，并立即尝试刷出。
 bool Reactor::SendBytes(Session& session, std::span<const uint8_t> data) {
   if (data.empty()) {
     return true;
@@ -175,6 +191,7 @@ bool Reactor::SendBytes(Session& session, std::span<const uint8_t> data) {
   return true;
 }
 
+// --- 可写事件：非阻塞 send 刷出 outbuf ---
 void Reactor::HandleWritable(int fd) {
   const auto fit = fd_to_sid_.find(fd);
   if (fit == fd_to_sid_.end()) {
@@ -197,6 +214,7 @@ void Reactor::HandleWritable(int fd) {
   UpdateInterest(session, true, !session.outbuf.empty());
 }
 
+// --- 会话关闭：从 epoll / Router 移除 ---
 void Reactor::CloseSession(uint64_t sid) {
   const auto it = sessions_.find(sid);
   if (it == sessions_.end()) {
@@ -219,6 +237,7 @@ void Reactor::CloseSession(uint64_t sid) {
   sessions_.erase(it);
 }
 
+// --- 系统帧处理（AUTH / SUB / UNSUB / KPALIVE）---
 bool Reactor::HandleSystem(Session& session, const FrameView& frame) {
   const uint32_t type = HeaderFieldHost(frame.header, &WireHeader::type);
   switch (static_cast<SysCmd>(type)) {
@@ -237,6 +256,7 @@ bool Reactor::HandleSystem(Session& session, const FrameView& frame) {
       session.authed = true;
       session.gid = hiim::wire::BeToHost32(auth.gid);
       session.nid = hiim::wire::BeToHost32(auth.nid);
+      // 绑定 nid → (sid, reactor_idx) 供后续 AsyncSend 路由
       ctx_.GetRouter().BindNid(session.nid, session.sid, idx_);
       const auto ack = EncodeFrame(static_cast<uint32_t>(SysCmd::kAuthAck), session.nid,
                                    kFlagSys, std::span<const uint8_t>{});
@@ -282,6 +302,7 @@ bool Reactor::HandleSystem(Session& session, const FrameView& frame) {
   }
 }
 
+// --- 上行入队：业务帧 Push 到 RecvQueue 并唤醒 Worker ---
 void Reactor::EnqueueInbound(Session& session, FrameView frame) {
   if (!session.authed) {
     CloseSession(session.sid);
@@ -315,10 +336,13 @@ void Reactor::EnqueueInbound(Session& session, FrameView frame) {
               << "\n";
     return;
   }
+  // 唤醒目标 Worker 消费 RecvQueue
   ctx_.WorkerWakeup(worker_idx).Notify();
 }
 
+// --- 可读事件：收包、拆帧、系统/业务分发 ---
 void Reactor::HandleReadable(int fd) {
+  // 唤醒 fd：Drain pipe/eventfd 后处理 ConnQueue 和 SendQueue
   if (fd == ctx_.ReactorWakeup(idx_).Fd()) {
     ctx_.ReactorWakeup(idx_).Drain();
     DrainNewConnections();
@@ -356,6 +380,7 @@ void Reactor::HandleReadable(int fd) {
   }
 }
 
+// --- epoll/kqueue 主循环 ---
 void Reactor::Run() {
   while (ctx_.Running().load(std::memory_order_acquire)) {
 #if defined(__linux__)
@@ -383,9 +408,11 @@ void Reactor::Run() {
       }
     }
 #endif
+    // 即使没有 epoll 事件也主动 drain SendQueue，避免遗漏
     DrainSendQueue();
   }
 
+  // 退出前关闭所有残留会话
   for (auto it = sessions_.begin(); it != sessions_.end();) {
     const uint64_t sid = it->first;
     ++it;

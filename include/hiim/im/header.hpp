@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件: im/header.hpp
+// 职责: 定义 IM 业务消息头（52 字节）布局及打包/解析工具
+// 在系统中的位置: 业务层协议，嵌在 wire payload 内；bridge 下行路由读取 dest_nid/seq
+// =============================================================================
+
 #pragma once
 
 #include <cstddef>
@@ -24,15 +30,16 @@
 
 namespace hiim::im {
 
-// Must match hi-im-api/pkg/im/header (Size=52, big-endian MesgHeadHton).
+// 布局须与 hi-im-api/pkg/im/header 一致（Size=52，大端 MesgHeadHton）
 static constexpr std::size_t kHeaderSize = 52;
-static constexpr std::size_t kOffsetCmd = 0;
-static constexpr std::size_t kOffsetLength = 4;
-static constexpr std::size_t kOffsetSid = 8;
-static constexpr std::size_t kOffsetCid = 16;
-static constexpr std::size_t kOffsetNid = 24;
-static constexpr std::size_t kOffsetSeq = 28;
+static constexpr std::size_t kOffsetCmd = 0;      // 业务命令字偏移
+static constexpr std::size_t kOffsetLength = 4;   // body 长度偏移
+static constexpr std::size_t kOffsetSid = 8;      // 会话 ID 偏移
+static constexpr std::size_t kOffsetCid = 16;     // 连接 ID 偏移（当前写零）
+static constexpr std::size_t kOffsetNid = 24;     // 目标节点 ID 偏移（bridge 路由关键字段）
+static constexpr std::size_t kOffsetSeq = 28;     // 消息序号偏移（日志/去重）
 
+/// 主机序 → 大端序 64 位；写 IM 头 sid/seq 时使用
 inline uint64_t HostToBe64(uint64_t v) {
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
   return __builtin_bswap64(v);
@@ -43,8 +50,11 @@ inline uint64_t HostToBe64(uint64_t v) {
 #endif
 }
 
+/// 大端序 → 主机序 64 位
 inline uint64_t BeToHost64(uint64_t v) { return HostToBe64(v); }
 
+/// 将 IM 头写入缓冲区；cid 与 seq 后 16 字节填零，与 Go 侧 MesgHead 对齐
+/// 调用方：PackPayload、worker 构造出站业务消息
 inline void WriteHeader(std::span<uint8_t> buf, uint32_t cmd, uint32_t length, uint64_t sid,
                         uint32_t dest_nid, uint64_t seq) {
   if (buf.size() < kHeaderSize) {
@@ -64,6 +74,7 @@ inline void WriteHeader(std::span<uint8_t> buf, uint32_t cmd, uint32_t length, u
   std::memset(buf.data() + kOffsetSeq + 8, 0, 16);
 }
 
+/// 打包 IM 头 + body 为连续字节；结果作为 wire 帧的 payload 发送
 inline std::vector<uint8_t> PackPayload(uint32_t cmd, uint64_t sid, uint32_t dest_nid,
                                         uint64_t seq, std::span<const uint8_t> body) {
   std::vector<uint8_t> out(kHeaderSize + body.size());
@@ -74,6 +85,8 @@ inline std::vector<uint8_t> PackPayload(uint32_t cmd, uint64_t sid, uint32_t des
   return out;
 }
 
+/// 从 payload 读取目标 nid（大端转主机序）；bridge 下行 AsyncSend 路由依据
+/// 注意：payload 须含完整 IM 头，否则返回 0
 inline uint32_t ReadDestNid(std::span<const uint8_t> payload) {
   if (payload.size() < kHeaderSize) {
     return 0;
@@ -83,6 +96,7 @@ inline uint32_t ReadDestNid(std::span<const uint8_t> payload) {
   return hiim::wire::BeToHost32(be_nid);
 }
 
+/// 从 payload 读取消息序号；bridge 日志与链路追踪使用
 inline uint64_t ReadSeq(std::span<const uint8_t> payload) {
   if (payload.size() < kHeaderSize) {
     return 0;

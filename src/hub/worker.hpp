@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件：worker.hpp
+// 职责：从 RecvQueue 消费 InboundMessage，按 cmd 分派到注册的 Handler。
+// 流水线角色：Listener → Reactor → Worker → Distributor 的业务处理层。
+// 涉及队列：RecvQueue[idx]（MPSC，Reactor Push / 本 Worker Pop）。
+// 执行线程：每个 Worker 实例独占一个线程。
+// =============================================================================
 
 #pragma once
 
@@ -22,6 +29,7 @@
 
 namespace hiim::hub {
 
+// 业务 Worker：epoll 监听唤醒 fd，Pop RecvQueue 并调用 MessageHandler。
 class Worker {
  public:
   Worker(HubContext& ctx, int idx);
@@ -35,6 +43,7 @@ class Worker {
   void Join();
 
  private:
+  // 主循环：epoll_wait → Drain 唤醒 → Pop RecvQueue → 调用 Handler。
   void Run();
 
   HubContext& ctx_;

@@ -12,6 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件：router.cpp
+// 职责：维护两张路由表——SUB 表（publish 用）和 NID 表（async_send 用）。
+// SUB 表：cmd → [订阅者列表]；NID 表：nid → {sid, reactor_idx}。
+// 写表时机：Reactor 处理 AUTH（BindNid）、SUB/UNSUB；断连时 RemoveSession。
+// =============================================================================
 
 #include "hiim/hub/router.hpp"
 
@@ -21,6 +27,7 @@
 
 namespace hiim::hub {
 
+// 注册或更新订阅；同一 sid 重复 SUB 同一 cmd 时覆盖旧记录。
 Status Router::Subscribe(uint32_t cmd, const Subscriber& sub) {
   std::unique_lock lock(mu_);
   auto& vec = sub_table_[cmd];
@@ -35,6 +42,7 @@ Status Router::Subscribe(uint32_t cmd, const Subscriber& sub) {
   return Status::Ok();
 }
 
+// 取消某会话对某 cmd 的订阅。
 Status Router::Unsubscribe(uint32_t cmd, uint64_t sid) {
   std::unique_lock lock(mu_);
   const auto table_it = sub_table_.find(cmd);
@@ -54,6 +62,7 @@ Status Router::Unsubscribe(uint32_t cmd, uint64_t sid) {
   return Status::Ok();
 }
 
+// 连接断开时批量清理：移除该 sid 的全部 SUB 记录 + 解绑 nid。
 void Router::RemoveSession(uint64_t sid, uint32_t nid) {
   std::unique_lock lock(mu_);
   for (auto& [cmd, vec] : sub_table_) {
@@ -67,6 +76,7 @@ void Router::RemoveSession(uint64_t sid, uint32_t nid) {
   }
 }
 
+// 查找某 cmd 的全部订阅者；Publish 遍历此列表 fan-out 入 DistQueue。
 std::vector<Subscriber> Router::FindSubscribers(uint32_t cmd) const {
   std::shared_lock lock(mu_);
   const auto it = sub_table_.find(cmd);
@@ -76,6 +86,7 @@ std::vector<Subscriber> Router::FindSubscribers(uint32_t cmd) const {
   return it->second;
 }
 
+// 按 nid 查找单播路由；AsyncSend 首步查表。
 std::optional<NidRoute> Router::FindNidRoute(uint32_t nid) const {
   std::shared_lock lock(mu_);
   const auto it = nid_map_.find(nid);
@@ -85,11 +96,13 @@ std::optional<NidRoute> Router::FindNidRoute(uint32_t nid) const {
   return it->second;
 }
 
+// AUTH 成功后绑定 nid → (sid, reactor_idx)；新连接可覆盖同 nid 旧绑定。
 void Router::BindNid(uint32_t nid, uint64_t sid, int reactor_idx) {
   std::unique_lock lock(mu_);
   nid_map_[nid] = NidRoute{sid, reactor_idx};
 }
 
+// 解绑 nid；仅 sid 匹配时才删除，防止误删新连接。
 void Router::UnbindNid(uint32_t nid, uint64_t sid) {
   std::unique_lock lock(mu_);
   const auto it = nid_map_.find(nid);
@@ -98,6 +111,7 @@ void Router::UnbindNid(uint32_t nid, uint64_t sid) {
   }
 }
 
+// 查询某 cmd 订阅者数量；health/metrics 使用。
 std::size_t Router::SubscriptionCount(uint32_t cmd) const {
   std::shared_lock lock(mu_);
   const auto it = sub_table_.find(cmd);

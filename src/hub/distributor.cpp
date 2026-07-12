@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件：distributor.cpp
+// 职责：消费 DistQueue，将 OutboundFrame 按 reactor_idx 推入 SendQueue 并唤醒 Reactor。
+// 流水线角色：Listener → Reactor → Worker → Distributor 的下行分发层。
+// 涉及队列：
+//   - DistQueue（MPSC，Publish/AsyncSend Push / 本线程 Pop）
+//   - SendQueue[reactor_idx]（SPSC，本线程 Push / Reactor Pop）
+// 执行线程：Distributor 专用线程。
+// =============================================================================
 
 #include "hub/distributor.hpp"
 
@@ -35,6 +44,7 @@ namespace hiim::hub {
 
 namespace {
 
+// 将单帧路由到目标 Reactor 的 SendQueue 并 Notify。
 bool RouteToSendQueue(HubContext& ctx, OutboundFrame frame) {
   const RouteLogMeta meta = ParseRouteLogMeta(frame.bytes);
   if (frame.reactor_idx < 0) {
@@ -59,6 +69,7 @@ Distributor::Distributor(HubContext& ctx) : ctx_(ctx) {}
 
 Distributor::~Distributor() { Stop(); }
 
+// --- 启动：创建 epoll 并注册 DistWakeup fd ---
 void Distributor::Start() {
 #if defined(__linux__)
   epfd_ = epoll_create1(EPOLL_CLOEXEC);
@@ -94,6 +105,7 @@ void Distributor::Join() {
 #endif
 }
 
+// --- 主循环：等待唤醒 → Pop DistQueue → 路由到 SendQueue ---
 void Distributor::Run() {
   auto route_frame = [this](OutboundFrame frame) {
     RouteToSendQueue(ctx_, std::move(frame));

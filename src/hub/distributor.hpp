@@ -12,6 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件：distributor.hpp
+// 职责：从 DistQueue 消费 OutboundFrame，按 reactor_idx 路由到 SendQueue。
+// 流水线角色：Listener → Reactor → Worker → Distributor 的下行分发层。
+// 涉及队列：
+//   - DistQueue（MPSC，Worker/Handler Push / 本 Distributor Pop）
+//   - SendQueue[reactor_idx]（SPSC，本 Distributor Push / Reactor Pop）
+// 执行线程：每个 HubContext 一个 Distributor 线程。
+// =============================================================================
 
 #pragma once
 
@@ -22,6 +31,7 @@
 
 namespace hiim::hub {
 
+// 下行分发器：将 OutboundFrame 从 DistQueue 路由到目标 Reactor 的 SendQueue。
 class Distributor {
  public:
   explicit Distributor(HubContext& ctx);
@@ -35,6 +45,7 @@ class Distributor {
   void Join();
 
  private:
+  // 主循环：epoll_wait → Drain 唤醒 → Pop DistQueue → 路由到 SendQueue。
   void Run();
 
   HubContext& ctx_;

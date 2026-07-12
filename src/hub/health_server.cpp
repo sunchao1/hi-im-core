@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件：health_server.cpp
+// 职责：HTTP 健康检查实现。
+// 端点：
+//   GET /healthz  → 200 ok（进程存活）
+//   GET /readyz   → HubServer::IsReady() 为真时 200，否则 503
+// =============================================================================
 
 #include "hub/health_server.hpp"
 
@@ -42,6 +49,7 @@ bool HealthServer::ParsePort(int& port) const {
   return true;
 }
 
+// 创建 listen socket 并启动探活线程。
 bool HealthServer::Start() {
   int port = 0;
   if (!ParsePort(port)) {
@@ -87,6 +95,7 @@ void HealthServer::Join() {
   }
 }
 
+// HTTP 探活主循环：每连接读一次请求、回一次响应、即关闭。
 void HealthServer::Run() {
   while (running_.load(std::memory_order_acquire)) {
     sockaddr_in client{};
@@ -104,6 +113,7 @@ void HealthServer::Run() {
     }
     req[n] = '\0';
 
+    // /readyz 检查双平面是否均已监听；其余路径视为 /healthz
     const bool ready_path = std::strstr(req, "/readyz") != nullptr;
     const bool ok = ready_path ? (hub_ != nullptr && hub_->IsReady()) : true;
     const char* body = ok ? "ok\n" : "not ready\n";

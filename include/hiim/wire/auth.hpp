@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件: wire/auth.hpp
+// 职责: 定义认证请求 payload 布局及编解码，封装为 SysCmd::kAuthReq 帧
+// 在系统中的位置: 协议层，客户端连接后首包、reactor/worker 认证流程使用
+// =============================================================================
 
 #pragma once
 
@@ -28,21 +33,23 @@
 
 namespace hiim::wire {
 
-static constexpr std::size_t kAuthUserLen = 32;
-static constexpr std::size_t kAuthPassLen = 16;
+static constexpr std::size_t kAuthUserLen = 32;   // 用户名定长字段
+static constexpr std::size_t kAuthPassLen = 16;   // 密码定长字段
 static constexpr std::size_t kAuthPayloadSize = 4 + kAuthUserLen + kAuthPassLen + 4;
 
 #pragma pack(push, 1)
+/// 认证请求体；紧跟在 WireHeader 之后，type=kAuthReq、flag=kFlagSys
 struct AuthPayload {
-  uint32_t gid;
-  char user[kAuthUserLen];
-  char passwd[kAuthPassLen];
-  uint32_t nid;
+  uint32_t gid;                  // 组 ID（大端）
+  char user[kAuthUserLen];       // 用户名，不足补零，超长截断
+  char passwd[kAuthPassLen];     // 密码，同上
+  uint32_t nid;                  // 客户端声明的节点 ID（大端）
 };
 #pragma pack(pop)
 
 static_assert(sizeof(AuthPayload) == kAuthPayloadSize);
 
+/// 构造认证 payload（字段转大端、字符串安全拷贝）；客户端/SDK 发认证包时调用
 inline AuthPayload MakeAuthPayload(uint32_t gid, std::string_view user,
                                    std::string_view passwd, uint32_t nid) {
   AuthPayload p{};
@@ -59,6 +66,7 @@ inline AuthPayload MakeAuthPayload(uint32_t gid, std::string_view user,
   return p;
 }
 
+/// 从 payload 字节流反序列化 AuthPayload；长度不足返回 false
 inline bool DecodeAuthPayload(std::span<const uint8_t> payload, AuthPayload& out) {
   if (payload.size() < kAuthPayloadSize) {
     return false;
@@ -67,6 +75,7 @@ inline bool DecodeAuthPayload(std::span<const uint8_t> payload, AuthPayload& out
   return true;
 }
 
+/// 编码完整认证帧（帧头 + AuthPayload）；type=kAuthReq，flag=kFlagSys
 inline std::vector<uint8_t> EncodeAuthFrame(uint32_t gid, std::string_view user,
                                              std::string_view passwd, uint32_t nid) {
   const AuthPayload p = MakeAuthPayload(gid, user, passwd, nid);

@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件：worker.cpp
+// 职责：消费 RecvQueue 中的 InboundMessage，分派到 cmd 对应的 Handler。
+// 流水线角色：Listener → Reactor → Worker → Distributor 的业务处理层。
+// 涉及队列：RecvQueue[idx]（MPSC，Reactor Push / 本 Worker Pop）。
+// 执行线程：Worker 专用线程。
+// =============================================================================
 
 #include "hub/worker.hpp"
 
@@ -32,6 +39,7 @@ Worker::Worker(HubContext& ctx, int idx) : ctx_(ctx), idx_(idx) {}
 
 Worker::~Worker() { Stop(); }
 
+// --- 启动：创建 epoll 并注册 WorkerWakeup fd ---
 void Worker::Start() {
 #if defined(__linux__)
   epfd_ = epoll_create1(EPOLL_CLOEXEC);
@@ -67,6 +75,7 @@ void Worker::Join() {
 #endif
 }
 
+// --- 主循环：等待唤醒 → Pop RecvQueue → 调用 Handler ---
 void Worker::Run() {
   auto& q = ctx_.RecvQueue(idx_);
   while (ctx_.Running().load(std::memory_order_acquire)) {
@@ -89,6 +98,7 @@ void Worker::Run() {
     }
 #endif
 
+    // 批量 Pop 并分派；Handler 可能调用 Publish/AsyncSend 写入 DistQueue
     while (auto msg = q.Pop()) {
       MessageHandler handler = ctx_.FindHandler(msg->type);
       if (!handler) {

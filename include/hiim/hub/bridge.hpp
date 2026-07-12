@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// =============================================================================
+// 文件: hub/bridge.hpp
+// 职责: 注册 Forward↔Backend 跨平面桥接 handler，实现上行广播与下行单播
+// 在系统中的位置: HubServer 构造时调用，连接两个平面的消息流转
+// =============================================================================
 
 #pragma once
 
@@ -19,6 +24,10 @@
 
 namespace hiim::hub {
 
+/// 注册双平面桥接 handler 并互设 peer
+/// - Forward 默认 handler：上行消息 → peer->Publish（广播到 Backend 订阅者）
+/// - Backend 默认 handler：下行消息 → 解析 IM dest_nid → peer->AsyncSend（单播到 Forward 客户端）
+/// 调用方：HubServer 构造函数（hub_server.cpp），无需业务方手动调用
 void RegisterBridgeHandlers(HubContext& forward_ctx, HubContext& backend_ctx);
 
 }  // namespace hiim::hub
