@@ -172,3 +172,5 @@ ctest --test-dir build --output-on-failure
 优先啃 **reactor.cpp + queue.hpp + bridge/router/distributor** 五条线，再对照 `bridge_downlink_test` 和 `hub_proxy_test` 把双平面和路由串起来。
 
 **第二遍必读**：[跟一条消息读代码.md](./跟一条消息读代码.md) — 按函数顺序跟一条上行业务帧打卡源码。
+
+**故事线串框架**：[群聊故事线串 hi-im 核心业务 + hi-im-core 线程模型](./群聊故事线串起来hi-im核心业务+hi-im-core的线程模型辅助迅速掌握hi-im.md) — 11 步群聊 ↔ 四角色四队列 ↔ 源码锚点。
